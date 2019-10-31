@@ -23,14 +23,16 @@ instance Show Board where
 
 instance Show Tile where
     show (Clear n) = show n --Revealed tile
-    show (Hidden n _) = show (NoQuotes "U") --Unknown
-    show (Mine _) = show (NoQuotes "X") --Mine
+    show (Hidden _ True) = show (NoQuotes "F") --Flagged tile
+    --show (Mine False) = show (NoQuotes "X") --Mine only for debugging
+    show (Mine True) = show (NoQuotes "F") --Flagged tile
+    show _ = show (NoQuotes " ")    --Unknown
 
 --Declare Constants
 numberOfMines :: Int
-numberOfMines = 2
+numberOfMines = 10
 sizeOfMap :: Int
-sizeOfMap = 3   --Map is always a square
+sizeOfMap = 8   --Map is always a square
 
 --Setup the game
 main :: IO ()
@@ -51,15 +53,19 @@ turn myMap GameOver = do
     print myMap
     print "You have hit a mine and been violently killed. Sorry!"
 turn myMap Ongoing = do    
+    print "Would you like to place a flag"
+    --flagString <- getLine 
+    --let flag = read flagString :: Bool
     print "Select a row"
     rowString <- getLine     
     let row = read rowString :: Int
     print "Select a column"
     colString <- getLine     
     let col = read colString :: Int
-    let (myNewMap, tile) = updateMap row col revealTile myMap
-    print myNewMap
-    turn myNewMap (checkGameStatus myNewMap tile)
+    let (updatedMap, selectedTile) = updateMap (row, col) revealTile myMap
+    let cascadedUpdatedMap = cascadeReveal updatedMap (tilesToReveal updatedMap selectedTile (row, col))
+    print cascadedUpdatedMap
+    turn cascadedUpdatedMap (checkGameStatus cascadedUpdatedMap selectedTile)
 
 --Create the map
 createMap :: Board
@@ -71,12 +77,16 @@ genRow :: Int -> [Tile]
 genRow 0 = []
 genRow col = ( Hidden 0 False ):(genRow (col-1) )
 
---Helper functions for updating the map
-updateMap :: Int -> Int -> (Tile -> Tile) -> Board -> (Board, Tile)
-updateMap 0 col op (Board (x:xs)) = ( Board (newMap:xs), resultTile )
+--Allows you to retrieve any tile from the map
+getTile :: (Int, Int) -> Board -> Tile
+getTile coords map = snd $ updateMap coords id map   
+
+--Functions for updating the map
+updateMap :: (Int, Int) -> (Tile -> Tile) -> Board -> (Board, Tile)
+updateMap (0, col) op (Board (x:xs)) = ( Board (newMap:xs), resultTile )
     where (newMap, resultTile) =  (selectTile col op x)
-updateMap row col op (Board (x:xs)) = ( Board (x:newMap), resultTile )
-    where (Board newMap, resultTile) = updateMap (row-1) col op (Board xs)
+updateMap (row, col) op (Board (x:xs)) = ( Board (x:newMap), resultTile )
+    where (Board newMap, resultTile) = updateMap ((row-1), col) op (Board xs)
 
 selectTile :: Int -> (Tile -> Tile) -> [Tile] -> ([Tile], Tile)
 selectTile 0 op (t:ts) = (newT:ts, newT)
@@ -90,27 +100,35 @@ revealTile (Clear n) = Clear n
 revealTile (Hidden n _) = (Clear n)
 revealTile (Mine flagged) = Mine flagged
 
-cascadeReveal :: Tile -> Tile
-cascadeReveal (Clear n) = (Clear n)
-cascadeReveal (Hidden n _) = (Clear n)
-cascadeReveal (Mine flagged) = Mine flagged 
+cascadeReveal :: Board -> [(Int, Int)] ->  Board
+cascadeReveal map [] = map
+cascadeReveal map ((row, col):rest) = nextReveal newMap ((tilesToReveal map tile (row, col))++rest)
+    where (newMap, tile) = updateMap (row, col) revealTile map
+
+nextReveal :: Board -> [(Int, Int)] -> Board
+nextReveal map [] = map
+nextReveal map (x:xs) = if isHidden $ getTile x map then cascadeReveal map (x:xs) else nextReveal map xs
+    where isHidden (Hidden _ _) = True 
+          isHidden _ = False
+
+tilesToReveal :: Board -> Tile -> (Int, Int) -> [(Int, Int)]
+tilesToReveal map (Clear 0) (row, col) =  (getSurrounding (row, col))
+tilesToReveal _ _ _ = []
 
 --Place the mines on the board
 placeMines :: Board -> [ (Int, Int) ] -> Board
 placeMines board [] = board
 placeMines board ((row, col):rest) = placeMines ( incrementMineCount newMap (row, col) ) rest
-    where (newMap, _) = updateMap row col placeMine board
+    where (newMap, _) = updateMap (row, col) placeMine board
 
 placeMine :: Tile -> Tile
 placeMine (Hidden _ flagged) = Mine flagged
 placeMine _ = error "Can't place a mine there"
 
 incrementMineCount :: Board -> (Int, Int) -> Board
-incrementMineCount map (row, col) = recIncrementMineCount map [(row-1, col-1), (row-1, col), (row-1, col+1), (row, col-1), (row, col+1), (row+1, col-1), (row+1, col), (row+1, col+1)]
+incrementMineCount map (row, col) = recIncrementMineCount map (getSurrounding (row, col))
     where recIncrementMineCount map [] = map
-          recIncrementMineCount map ((row, col):rest) | inRange row col = recIncrementMineCount newMap rest
-                                                      | otherwise = recIncrementMineCount map rest
-            where (newMap, _) = updateMap row col incrMineCount map
+          recIncrementMineCount map ((row, col):rest) = recIncrementMineCount (fst (updateMap (row, col) incrMineCount map)) rest
 
 incrMineCount :: Tile -> Tile
 incrMineCount (Hidden n flagged) = (Hidden (n+1) flagged)
@@ -132,11 +150,14 @@ checkRowForWin ((Hidden _ _):rest) = False
 checkRowForWin ((Mine _):rest) = checkRowForWin rest
 
 --Helper functions
-inRange :: Int -> Int -> Bool
-inRange row col = row >= 0 && row < sizeOfMap && col > 0 && col < sizeOfMap
+inRange :: (Int, Int) -> Bool
+inRange (row, col) = row >= 0 && row < sizeOfMap && col >= 0 && col < sizeOfMap
 
 genRandomPairs :: StdGen -> Int -> [(Int, Int)] -> [(Int, Int)]
 genRandomPairs _ 0 list = list
 genRandomPairs g n list = if elem (row, col) list then genRandomPairs g3 n list else genRandomPairs g3 (n-1) ((row, col):list) --Make sure the tile doesn't already have a mine in it
     where (row, g2) = randomR (0, sizeOfMap-1) g
-          (col, g3) = randomR (0, sizeOfMap-1) g2
+          (col, g3) = randomR (0, sizeOfMap-1) g2                           
+
+getSurrounding :: (Int, Int) -> [(Int, Int)]
+getSurrounding (row, col) = filter inRange [(row-1, col-1), (row-1, col), (row-1, col+1), (row, col-1), (row, col+1), (row+1, col-1), (row+1, col), (row+1, col+1)]
