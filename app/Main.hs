@@ -8,156 +8,205 @@ data GameStatus = Ongoing
                   | Victory 
                   | GameOver
 
-data Tile = Clear Int
-            | Hidden Int Bool
-            | Mine Bool
+data Grid = Grid { prevRows :: [Row], nextRows :: [Row], currRowIndex :: Int }    --Zipper list, allows us to easily go backwards and forwards through the list
+                                                
+data Row = Row { prevCols :: [Square], nextCols :: [Square], currColIndex :: Int }
 
-newtype Board = Board [ [Tile] ]
+data Square = Clear Int (Int, Int)
+            | Hidden Int Bool (Int, Int)
+            | Mine Bool (Int, Int)
+
+
+data Action = Action (Square->Square) (Int, Int)
 
 newtype NoQuotes = NoQuotes String      --Taken from https://www.reddit.com/r/haskell/comments/blxveo/print_out_string_without_double_quotes/
 instance Show NoQuotes where show (NoQuotes str) = str
 
-instance Show Board where
-    show ( Board [] ) = ""
-    show ( Board (x:xs) ) = show x ++ "\n" ++ ( show (Board xs) )
+instance Show Grid where
+    show ( Grid [] [] _ ) = ""
+    show ( Grid [] (x:xs) currRow ) = show x ++ "\n" ++ ( show (Grid [] xs currRow) )
+    show grid = show $ startOfGrid grid --Make sure we start displaying the rows at the begining
 
-instance Show Tile where
-    show (Clear n) = show n --Revealed tile
-    show (Hidden _ True) = show (NoQuotes "F") --Flagged tile
-    --show (Mine False) = show (NoQuotes "X") --Mine only for debugging
-    show (Mine True) = show (NoQuotes "F") --Flagged tile
+instance Show Row where
+    show ( Row [] nextCols _ ) = show nextCols
+    show row = show $ startOfRow row
+
+instance Show Square where
+    show (Clear n _) = show n --Revealed square
+    show (Hidden _ True _) = show (NoQuotes "F") --Flagged square
+    show (Mine False _) = show (NoQuotes "X") --Mine only for debugging
+    show (Mine True _) = show (NoQuotes "F") --Flagged square
     show _ = show (NoQuotes " ")    --Unknown
 
 --Declare Constants
 numberOfMines :: Int
 numberOfMines = 10
-sizeOfMap :: Int
-sizeOfMap = 8   --Map is always a square
+lengthOfMap :: Int
+lengthOfMap = 8   --Map is always a square
 
 --Setup the game
 main :: IO ()
 main = do
     generator <- newStdGen
     let randomPairs = genRandomPairs generator numberOfMines [] --Pass in an empty list which we can recursively add the pairs to so long as they haven't already been added
-    let myMap = createMap
-    let minedMap = placeMines myMap randomPairs
-    print minedMap
-    turn minedMap Ongoing
+    let grid = createGrid
+    let minedGrid = mineTheField grid randomPairs
+    let squaresToClear = (lengthOfMap * lengthOfMap) - numberOfMines 
+    print minedGrid
+    runTurn minedGrid squaresToClear
 
 --Run until the game is finished
-turn :: Board -> GameStatus -> IO ()
-turn myMap Victory = do
-    print myMap
+runTurn :: Grid -> Int -> IO ()
+runTurn grid 0 = do
+    print grid
     print "Congratulations. The mines can now be cleared. You have won!"
-turn myMap GameOver = do
-    print myMap
-    print "You have hit a mine and been violently killed. Sorry!"
-turn myMap Ongoing = do    
-    print "Would you like to place a flag"
-    --flagString <- getLine 
-    --let flag = read flagString :: Bool
+runTurn grid left = do    
     print "Select a row"
     rowString <- getLine     
     let row = read rowString :: Int
     print "Select a column"
     colString <- getLine     
     let col = read colString :: Int
-    let (updatedMap, selectedTile) = updateMap (row, col) revealTile myMap
-    let cascadedUpdatedMap = cascadeReveal updatedMap (tilesToReveal updatedMap selectedTile (row, col))
-    print cascadedUpdatedMap
-    turn cascadedUpdatedMap (checkGameStatus cascadedUpdatedMap selectedTile)
+    let (updatedGrid, updatedLeft) = selectTile grid (row, col) left
 
---Create the map
-createMap :: Board
-createMap = Board (recCreateMap sizeOfMap)
-    where recCreateMap 0 = []
-          recCreateMap row = (genRow sizeOfMap):( recCreateMap (row-1) )
+ {- print "Now place a flag"
+    print "Select a row"
+    rowString2 <- getLine     
+    let row2 = read rowString2 :: Int
+    print "Select a column"
+    colString2 <- getLine     
+    let col2 = read colString2 :: Int
+    -}
 
-genRow :: Int -> [Tile]
-genRow 0 = []
-genRow col = ( Hidden 0 False ):(genRow (col-1) )
+    print updatedGrid
+    print $ show updatedLeft
+    runTurn updatedGrid updatedLeft
 
---Allows you to retrieve any tile from the map
-getTile :: (Int, Int) -> Board -> Tile
-getTile coords map = snd $ updateMap coords id map   
+--Create the grid
+createGrid :: Grid
+createGrid = (Grid  [] (genGrid 0) 0)
+    where genGrid n | n == lengthOfMap = []
+                    | otherwise = (Row [] (genRow n 0) 0):(genGrid (n+1))
 
---Functions for updating the map
-updateMap :: (Int, Int) -> (Tile -> Tile) -> Board -> (Board, Tile)
-updateMap (0, col) op (Board (x:xs)) = ( Board (newMap:xs), resultTile )
-    where (newMap, resultTile) =  (selectTile col op x)
-updateMap (row, col) op (Board (x:xs)) = ( Board (x:newMap), resultTile )
-    where (Board newMap, resultTile) = updateMap ((row-1), col) op (Board xs)
+genRow :: Int -> Int -> [Square]
+genRow row col | col == lengthOfMap = []
+               | otherwise = ( Hidden 0 False (row, col) ):(genRow row (col+1) )
 
-selectTile :: Int -> (Tile -> Tile) -> [Tile] -> ([Tile], Tile)
-selectTile 0 op (t:ts) = (newT:ts, newT)
-    where newT = op t
-selectTile n op (t:ts) = ( (t:newList), resultTile )
-    where (newList, resultTile) = selectTile (n-1) op ts
+--Perform a set of moves on the grid
+updateGrid :: Grid -> Int -> Action-> (Grid, Square)
+updateGrid (Grid prevRows (currRow:nextRows) currRowIndex) 0 action = ((Grid prevRows (newRow:nextRows) currRowIndex), newSq)
+    where (newRow, newSq) = updateRow currRow (targetColDistance currRow action) action
+updateGrid (Grid prevRows (currRow:nextRows) currRowIndex) n action | n < 0 = updateGrid (Grid (currRow:prevRows) nextRows (currRowIndex+1)) (n+1) action
+updateGrid (Grid (lastRow:prevRows) nextRows currRowIndex) n action | n > 0 = updateGrid (Grid prevRows (lastRow:nextRows) (currRowIndex-1)) (n-1) action
 
---Reveal a mine
-revealTile :: Tile -> Tile
-revealTile (Clear n) = Clear n                                    
-revealTile (Hidden n _) = (Clear n)
-revealTile (Mine flagged) = Mine flagged
+updateRow :: Row -> Int -> Action -> (Row, Square)
+updateRow (Row prevSqs ((currSq):nextSqs) currColIndex) 0 (Action op coords) 
+    | (getSquareCoords currSq) /= coords = error "Somehow went to the wrong square"
+    | (getSquareCoords currSq) == coords = ((Row prevSqs (newSq:nextSqs) currColIndex), newSq)
+    where newSq = op currSq
+updateRow (Row prevSqs (currSq:nextSqs) currColIndex) n action | n < 0 = updateRow (Row (currSq:prevSqs) nextSqs (currColIndex+1)) (n+1) action
+updateRow (Row (lastSq:prevSqs) nextSqs currColIndex) n action | n > 0 = updateRow (Row prevSqs (lastSq:nextSqs) (currColIndex-1)) (n-1) action
 
-cascadeReveal :: Board -> [(Int, Int)] ->  Board
-cascadeReveal map [] = map
-cascadeReveal map ((row, col):rest) = nextReveal newMap ((tilesToReveal map tile (row, col))++rest)
-    where (newMap, tile) = updateMap (row, col) revealTile map
+--Place the mines on the field
+mineTheField :: Grid -> [(Int, Int)] -> Grid
+mineTheField grid [] = grid
+mineTheField grid (mine:mines) = mineTheField (performMoves grid actions) mines
+    where actions = (Action placeMine mine):(queueActions incrAdjMineCount (getSurrounding mine))   --place the mine and increment the surrounding tiles
 
-nextReveal :: Board -> [(Int, Int)] -> Board
-nextReveal map [] = map
-nextReveal map (x:xs) = if isHidden $ getTile x map then cascadeReveal map (x:xs) else nextReveal map xs
-    where isHidden (Hidden _ _) = True 
-          isHidden _ = False
+--TODO refactor + rename
+performMoves :: Grid -> [Action] -> Grid
+performMoves grid [] = grid
+performMoves grid (action:actions) = performMoves (fst (updateGrid grid (targetRowDistance grid action) action)) actions
 
-tilesToReveal :: Board -> Tile -> (Int, Int) -> [(Int, Int)]
-tilesToReveal map (Clear 0) (row, col) =  (getSurrounding (row, col))
-tilesToReveal _ _ _ = []
+queueActions :: (Square->Square) -> [(Int, Int)] -> [Action]
+queueActions _ [] = []
+queueActions op (x:xs) = (Action op x):(queueActions op xs)
 
---Place the mines on the board
-placeMines :: Board -> [ (Int, Int) ] -> Board
-placeMines board [] = board
-placeMines board ((row, col):rest) = placeMines ( incrementMineCount newMap (row, col) ) rest
-    where (newMap, _) = updateMap (row, col) placeMine board
+--Reveal a tile
+selectTile :: Grid -> (Int, Int) -> Int -> (Grid, Int)
+selectTile grid (row, col) left = case newSquare of (Mine _ _) -> error ("You landed on a mine and have lost\n" ++ (show grid))
+                                                    _ -> clearTiles newGrid [(row, col)] left   --Need to clear first tile twice to make sure proper checks are done
+    where action = (Action revealTile (row, col))
+          (newGrid, newSquare) = updateGrid grid (targetRowDistance grid action) action
 
-placeMine :: Tile -> Tile
-placeMine (Hidden _ flagged) = Mine flagged
+--TODO get left to decrement properly
+clearTiles :: Grid -> [(Int, Int)] -> Int -> (Grid, Int)
+clearTiles grid [] left = (grid, left)
+clearTiles grid ((row, col):rest) left = case newSquare of (Mine _ _) -> clearTiles grid rest (left)    --This case shouldn't happen
+                                                           (Clear 0 _) -> clearTiles newGrid (rest ++ ( cascadeReveal  newGrid (getSurrounding (row, col)) )) (left-1)   --Infinite recursion
+                                                           (Clear _ _) -> clearTiles newGrid rest (left-1)
+    where action = (Action revealTile (row, col))
+          (newGrid, newSquare) = updateGrid grid (targetRowDistance grid action) action
+
+
+cascadeReveal :: Grid -> [(Int, Int)] -> [(Int, Int)]
+cascadeReveal grid [] = []
+cascadeReveal grid ((row, col):rest) = case square of (Hidden _ _ _) -> ((row, col):(cascadeReveal grid rest))
+                                                      _ -> cascadeReveal grid rest
+    where (_, square) = updateGrid grid (targetRowDistance grid action) action
+          action = (Action getSquare (row, col))
+          
+--Various Actions you can perform on square
+placeMine :: Square -> Square
+placeMine (Hidden _ flag coords) = Mine flag coords
 placeMine _ = error "Can't place a mine there"
 
-incrementMineCount :: Board -> (Int, Int) -> Board
-incrementMineCount map (row, col) = recIncrementMineCount map (getSurrounding (row, col))
-    where recIncrementMineCount map [] = map
-          recIncrementMineCount map ((row, col):rest) = recIncrementMineCount (fst (updateMap (row, col) incrMineCount map)) rest
+revealTile :: Square -> Square
+revealTile (Clear n coords) = Clear n coords                                
+revealTile (Hidden n _ coords) = Clear n coords
+revealTile (Mine flag coords) = Mine flag coords
 
-incrMineCount :: Tile -> Tile
-incrMineCount (Hidden n flagged) = (Hidden (n+1) flagged)
-incrMineCount (Mine flagged) = (Mine flagged)
+--Place or remove a flag on a tile
+toggleFlag :: Square -> Square
+toggleFlag (Clear n coords) = Clear n coords
+toggleFlag (Hidden n flag coords) = Hidden n (not flag) coords
+toggleFlag (Mine flag coords) = Mine (not flag) coords
 
---Check game status
-checkGameStatus :: Board -> Tile -> GameStatus
-checkGameStatus _ (Mine _) = GameOver
-checkGameStatus map _ = if checkForWin map then Victory else Ongoing
+--Increment the number of adjacent mines
+incrAdjMineCount :: Square -> Square
+incrAdjMineCount (Clear n coords) = Clear (n+1) coords
+incrAdjMineCount (Hidden n flag coords) = Hidden (n+1) flag coords
+incrAdjMineCount (Mine flag coords) = Mine flag coords
 
-checkForWin :: Board -> Bool
-checkForWin (Board []) = True
-checkForWin (Board (row:rest)) = if checkRowForWin row then (checkForWin (Board rest)) else False
+getSquare :: Square -> Square
+getSquare sq = sq
 
-checkRowForWin :: [Tile] -> Bool
-checkRowForWin [] = True
-checkRowForWin ((Clear _):rest) = checkRowForWin rest
-checkRowForWin ((Hidden _ _):rest) = False
-checkRowForWin ((Mine _):rest) = checkRowForWin rest
+--Functions for returning to the begining of a row or the grid
+startOfRow :: Row -> Row
+startOfRow (Row prevCols nextCols index ) = Row [] (startOfList prevCols nextCols) index
+
+startOfGrid :: Grid -> Grid
+startOfGrid (Grid prevRows nextRows index) = Grid [] (startOfList prevRows nextRows) index
+
+startOfList :: [a] -> [a] -> [a]
+startOfList [] ys = ys
+startOfList (x:xs) ys = startOfList xs (x:ys)
+
+--Functions for navigating to a certain square
+targetRowDistance :: Grid -> Action -> Int
+targetRowDistance (Grid _ _ currRowIndex) (Action _ (targRow, _)) = currRowIndex - targRow
+
+targetColDistance :: Row -> Action -> Int
+targetColDistance (Row _ _ currColIndex) (Action _ (_, targCol)) = currColIndex - targCol
 
 --Helper functions
 inRange :: (Int, Int) -> Bool
-inRange (row, col) = row >= 0 && row < sizeOfMap && col >= 0 && col < sizeOfMap
+inRange (row, col) = row >= 0 && row < lengthOfMap && col >= 0 && col < lengthOfMap
 
 genRandomPairs :: StdGen -> Int -> [(Int, Int)] -> [(Int, Int)]
 genRandomPairs _ 0 list = list
 genRandomPairs g n list = if elem (row, col) list then genRandomPairs g3 n list else genRandomPairs g3 (n-1) ((row, col):list) --Make sure the tile doesn't already have a mine in it
-    where (row, g2) = randomR (0, sizeOfMap-1) g
-          (col, g3) = randomR (0, sizeOfMap-1) g2                           
+    where (row, g2) = randomR (0, lengthOfMap-1) g
+          (col, g3) = randomR (0, lengthOfMap-1) g2                           
 
 getSurrounding :: (Int, Int) -> [(Int, Int)]
 getSurrounding (row, col) = filter inRange [(row-1, col-1), (row-1, col), (row-1, col+1), (row, col-1), (row, col+1), (row+1, col-1), (row+1, col), (row+1, col+1)]
+
+getSquareCoords :: Square -> (Int, Int)
+getSquareCoords (Clear _ coords) = coords
+getSquareCoords (Hidden _ _ coords) = coords
+getSquareCoords (Mine _ coords) = coords
+
+--Computer Solver
+makeTrivialMoves :: Grid -> Grid
+makeTrivialMoves grid = grid
