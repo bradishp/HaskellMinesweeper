@@ -3,13 +3,13 @@ module Main where
 import Lib
 import System.Random
 import System.IO
+import AutoSolver
 
 --Ideas
--- Put numLeft inside Grid
 -- Pass stdGen in some state so program isn't as messy
 -- Remove coords from square as they aren't really needed and use up a lot of space
 
-data Grid = Grid { prevRows :: [Row], nextRows :: [Row], currRowIndex :: Int, numLeft :: Int }    --Zipper list, allows us to easily go backwards and forwards through the list
+data Grid = Grid { prevRows :: [Row], nextRows :: [Row], currRowIndex :: Int, numLeft :: Int, numFlagged :: Int }    --Zipper style lists, allows us to easily go backwards and forwards through the list
                                                 
 data Row = Row { prevCols :: [Square], nextCols :: [Square], currColIndex :: Int }
 
@@ -17,16 +17,18 @@ data Square = Clear Int (Int, Int)
             | Hidden Int Bool (Int, Int)
             | Mine Bool (Int, Int)
 
-
 data Action = Action (Square->Square) (Int, Int)
 
 newtype NoQuotes = NoQuotes String      --Taken from https://www.reddit.com/r/haskell/comments/blxveo/print_out_string_without_double_quotes/
 instance Show NoQuotes where show (NoQuotes str) = str
 
 instance Show Grid where
-    show ( Grid [] [] _ _ ) = ""
-    show ( Grid [] (x:xs) currRow numLeft ) = show x ++ "\n" ++ ( show (Grid [] xs currRow numLeft) )
+    show ( Grid [] [] _ _ _ ) = ""
+    show ( Grid [] (x:xs) currRow numLeft numFlagged ) = show x ++ "\n" ++ ( show (Grid [] xs currRow numLeft numFlagged) )
     show grid = show $ startOfGrid grid --Make sure we display the rows in the correct order
+
+instance Eq Grid where
+    (==) ( Grid _ _ _ numLeft1 numFlagged1 ) ( Grid _ _ _ numLeft2 numFlagged2 ) = numLeft1 == numLeft2 && numFlagged1 == numFlagged2 
 
 instance Show Row where
     show ( Row [] nextCols _ ) = show nextCols
@@ -45,7 +47,7 @@ numberOfMines = 10
 heightOfMap :: Int
 heightOfMap = 9
 widthOfMap :: Int
-widthOfMap = 9   --Map is always a square
+widthOfMap = 9  
 
 --Setup the game
 main :: IO ()
@@ -60,8 +62,8 @@ main = do
 
 --Run until the game is finished
 runTurn :: Grid  -> IO ()
-runTurn (Grid prevRows nextRows currRowIndex 0) = do
-    print (Grid prevRows nextRows currRowIndex 0)
+runTurn (Grid prevRows nextRows currRowIndex 0 numFlagged) = do
+    print (Grid prevRows nextRows currRowIndex 0 numFlagged)
     print "Congratulations. The mines can now be cleared. You have won!"
 runTurn grid = do    
     print "Select a row"
@@ -87,8 +89,8 @@ runTurn grid = do
 
 
 runAutoTurn :: Grid  -> StdGen -> IO ()
-runAutoTurn (Grid prevRows nextRows currRowIndex 0) _ = do
-    print (Grid prevRows nextRows currRowIndex 0)
+runAutoTurn (Grid prevRows nextRows currRowIndex 0 numFlagged) _ = do
+    print (Grid prevRows nextRows currRowIndex 0 numFlagged)
     print "Congratulations. The mines can now be cleared. The computer has won!"
 runAutoTurn grid gen = do    
     let (newGrid, newGen) = makeRandomMove grid gen
@@ -102,7 +104,7 @@ runAutoTurn grid gen = do
 
 --Create the grid
 createGrid :: Int -> Grid
-createGrid squaresToClear = (Grid  [] (genGrid 0) 0 squaresToClear)
+createGrid squaresToClear = (Grid  [] (genGrid 0) 0 squaresToClear 0)
     where genGrid n | n == heightOfMap = []
                     | otherwise = (Row [] (genRow n 0) 0):(genGrid (n+1))
 
@@ -112,10 +114,10 @@ genRow row col | col == widthOfMap = []
 
 --Perform a set of moves on the grid
 updateGrid :: Grid -> Int -> Action-> (Grid, Square)
-updateGrid (Grid prevRows (currRow:nextRows) currRowIndex numLeft) 0 action = ((Grid prevRows (newRow:nextRows) currRowIndex numLeft), newSq)
+updateGrid (Grid prevRows (currRow:nextRows) currRowIndex numLeft numFlagged) 0 action = ((Grid prevRows (newRow:nextRows) currRowIndex numLeft numFlagged), newSq)
     where (newRow, newSq) = updateRow currRow (targetColDistance currRow action) action
-updateGrid (Grid prevRows (currRow:nextRows) currRowIndex numLeft) n action | n < 0 = updateGrid (Grid (currRow:prevRows) nextRows (currRowIndex+1) numLeft) (n+1) action
-updateGrid (Grid (lastRow:prevRows) nextRows currRowIndex numLeft) n action | n > 0 = updateGrid (Grid prevRows (lastRow:nextRows) (currRowIndex-1) numLeft) (n-1) action
+updateGrid (Grid prevRows (currRow:nextRows) currRowIndex numLeft numFlagged) n action | n < 0 = updateGrid (Grid (currRow:prevRows) nextRows (currRowIndex+1) numLeft numFlagged) (n+1) action
+updateGrid (Grid (lastRow:prevRows) nextRows currRowIndex numLeft numFlagged) n action | n > 0 = updateGrid (Grid prevRows (lastRow:nextRows) (currRowIndex-1) numLeft numFlagged) (n-1) action
 
 updateRow :: Row -> Int -> Action -> (Row, Square)
 updateRow (Row prevSqs ((currSq):nextSqs) currColIndex) 0 (Action op coords) 
@@ -154,12 +156,12 @@ clearSquare grid coords = case oldSquare of (Clear _ _) -> grid --Tile has alrea
 
 cascadeClear :: Grid -> [(Int, Int)] -> Grid
 cascadeClear grid [] = grid
-cascadeClear grid (coords:rest) = case newSquare of (Clear 0 _) -> isValidClear newGrid (rest ++ (getSurrounding coords)) --(numLeft-1)   --Infinite recursion
-                                                    (Clear _ _) -> isValidClear newGrid rest --(numLeft-1)
+cascadeClear grid (coords:rest) = case newSquare of (Clear 0 _) -> isValidClear newGrid (rest ++ (getSurrounding coords))  --Infinite recursion
+                                                    (Clear _ _) -> isValidClear newGrid rest 
                                                     _ -> error "Tile isn't revealed after it has been cleared!" --This case should never happen
     where action = (Action revealTile coords)
-          ((Grid prevRows nextRows currRowIndex numLeft), newSquare) = updateGrid grid (targetRowDistance grid action) action
-          newGrid = (Grid prevRows nextRows currRowIndex (numLeft-1))
+          ((Grid prevRows nextRows currRowIndex numLeft numFlagged), newSquare) = updateGrid grid (targetRowDistance grid action) action
+          newGrid = (Grid prevRows nextRows currRowIndex (numLeft-1) numFlagged)
 
 --Iterates through the list until it finds the next square which needs to be cleared
 isValidClear :: Grid -> [(Int, Int)] -> Grid
@@ -199,7 +201,7 @@ startOfRow :: Row -> Row
 startOfRow (Row prevCols nextCols index ) = Row [] (startOfList prevCols nextCols) index
 
 startOfGrid :: Grid -> Grid
-startOfGrid (Grid prevRows nextRows index numLeft) = Grid [] (startOfList prevRows nextRows) index numLeft
+startOfGrid (Grid prevRows nextRows index numLeft numFlagged) = Grid [] (startOfList prevRows nextRows) index numLeft numFlagged
 
 startOfList :: [a] -> [a] -> [a]
 startOfList [] ys = ys
@@ -207,7 +209,7 @@ startOfList (x:xs) ys = startOfList xs (x:ys)
 
 --Functions for navigating to a certain square
 targetRowDistance :: Grid -> Action -> Int
-targetRowDistance (Grid _ _ currRowIndex _) (Action _ (targRow, _)) = currRowIndex - targRow
+targetRowDistance (Grid _ _ currRowIndex _ _) (Action _ (targRow, _)) = currRowIndex - targRow
 
 targetColDistance :: Row -> Action -> Int
 targetColDistance (Row _ _ currColIndex) (Action _ (_, targCol)) = currColIndex - targCol
@@ -235,11 +237,12 @@ getSquareCoords (Mine _ coords) = coords
 
 --Automatic Computer Solver
 makeRandomMove :: Grid -> StdGen -> (Grid, StdGen)
-makeRandomMove grid gen = ((clearSquare grid coords), newGen)
+makeRandomMove grid gen = ((clearSquare grid coords), newGen)   --Chance it could pick an already cleared square
     where ([coords], newGen) = genRandomPairs gen 1 []
 
 computerSolve :: Grid -> Grid
-computerSolve grid = makeTrivialMoves grid (0, 0)
+computerSolve grid = if grid == newGrid then newGrid else computerSolve newGrid --If we have changed something (either adding a flag or clearing a tile) go through grid again
+    where newGrid = makeTrivialMoves grid (0, 0)
 
 makeTrivialMoves :: Grid -> (Int, Int) -> Grid
 makeTrivialMoves grid (row, col) | row == heightOfMap = grid
@@ -257,15 +260,14 @@ checkSquare grid coords = case square of (Clear n _) -> checkSurrounding grid (g
           distance = (targetRowDistance grid action)
 
 checkSurrounding :: Grid -> [(Int, Int)] -> Int -> [(Int, Int)] -> Grid
-checkSurrounding  grid [] surroundingMines unknown | surroundingMines == (length unknown) = performMoves grid (queueActions toggleFlag unknown)
+checkSurrounding  grid [] surroundingMines unknown | surroundingMines == (length unknown) = performMoves grid (queueActions toggleFlag unknown) --Need to update flag number here
                                                    | surroundingMines == 0 = clearSelected grid unknown
                                                    | otherwise = grid --We have failed to work out anything useful
 checkSurrounding  grid (coords:rest) surroundingMines unknown = case square of (Clear _ _) -> checkSurrounding grid rest surroundingMines unknown
                                                                                (Hidden _ True _) -> error "Computer has incorrectly flagged a square which doesn't have a mine" --Debugging
                                                                                (Mine True _) -> checkSurrounding grid rest (surroundingMines-1) unknown
                                                                                (Hidden _ _ coords) -> checkSurrounding grid rest surroundingMines (coords:unknown)--Nothing useful known
-                                                                               (Mine _ coords) -> checkSurrounding grid rest surroundingMines (coords:unknown) 
-                                                                                
+                                                                               (Mine _ coords) -> checkSurrounding grid rest surroundingMines (coords:unknown)    
     where (_, square) = updateGrid grid distance action
           action = (Action getSquare coords)
           distance = (targetRowDistance grid action)
