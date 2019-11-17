@@ -6,6 +6,7 @@ module Minesweeper  (
     numberOfMines,
     heightOfMap,
     widthOfMap,
+    --setupGrid,
     createGrid,
     updateGrid,
     mineTheField,
@@ -18,7 +19,9 @@ module Minesweeper  (
     getSquare,
     targetRowDistance,
     getSurrounding,
-    genRandomPairs
+    genRandomPairs,
+    startOfGrid,
+    startOfRow
 ) where
 
 import System.Random
@@ -33,7 +36,6 @@ data Row = Row { prevCols :: [Square], nextCols :: [Square], currColIndex :: Int
 data Square = Clear Int (Int, Int)
             | Hidden Int Bool (Int, Int)
             | Mine Bool (Int, Int)
-    deriving Generic
 
 data Action = Action (Square->Square) (Int, Int)
 
@@ -63,10 +65,19 @@ instance Show Square where
 numberOfMines :: Int
 numberOfMines = 10
 heightOfMap :: Int
-heightOfMap = 9
+heightOfMap = 10
 widthOfMap :: Int
-widthOfMap = 9  
-        
+widthOfMap = 10
+      
+{-setupGrid :: Grid
+setupGrid = do
+    generator <- newStdGen
+    let (randomPairs, newGenerator) = genRandomPairs generator numberOfMines [] --Pass in an empty list which we can recursively add the pairs to so long as they haven't already been added
+    let squaresToClear = (heightOfMap * widthOfMap) - numberOfMines
+    let grid = createGrid squaresToClear
+    let minedGrid = mineTheField grid randomPairs
+    print minedGrid-}
+
 --Create the grid
 createGrid :: Int -> Grid
 createGrid squaresToClear = (Grid  [] (genGrid 0) 0 squaresToClear 0)
@@ -162,10 +173,10 @@ getSquare sq = sq
 
 --Functions for returning to the begining of a row or the grid
 startOfRow :: Row -> Row
-startOfRow (Row prevCols nextCols index ) = Row [] (startOfList prevCols nextCols) index
+startOfRow (Row prevCols nextCols _ ) = Row [] (startOfList prevCols nextCols) 0
 
 startOfGrid :: Grid -> Grid
-startOfGrid (Grid prevRows nextRows index numLeft numFlagged) = Grid [] (startOfList prevRows nextRows) index numLeft numFlagged
+startOfGrid (Grid prevRows nextRows _ numLeft numFlagged) = Grid [] (startOfList prevRows nextRows) 0 numLeft numFlagged
 
 startOfList :: [a] -> [a] -> [a]
 startOfList [] ys = ys
