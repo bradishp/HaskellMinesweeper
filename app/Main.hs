@@ -49,7 +49,8 @@ setup window = do
 
     --Setup minesweeper grid and populate it
     generator <- liftIO $ newStdGen
-    let (initialGrid, newGenerato) = setupGrid generator
+    let (initialGrid, newGenerator) = setupGrid generator
+    gen <- liftIO $ newIORef newGenerator
     grid <- liftIO $ newIORef initialGrid
     displayCanvas canvas initialGrid      --Display grid on the screen
   
@@ -64,11 +65,12 @@ setup window = do
         case gs of
             Ongoing -> do
                     currGrid <- liftIO $ readIORef grid
-                    let newGrid = computerMove currGrid
+                    generator <- liftIO $ readIORef gen --Don't need to bother updating generator as it will just guess the same values until it hits a new one
+                    let (newGrid, success) = computerMove currGrid generator
                     liftIO $ writeIORef grid newGrid
                     liftIO $ print newGrid
                     displayCanvas canvas newGrid
-                    checkGameState window newGrid False gameState
+                    checkGameState window newGrid success gameState
             _ ->
                 return ()
 
@@ -97,7 +99,7 @@ setup window = do
                         liftIO $ writeIORef grid newGrid
                         liftIO $ print newGrid
                         displayCanvas canvas newGrid
-                        checkGameState window newGrid False gameState
+                        checkGameState window newGrid True gameState
             _ -> return ()
 
 displayCanvas :: UI.Canvas -> Grid -> UI ()
@@ -157,11 +159,11 @@ greyOrGray :: (Int, Int) -> UI.FillStyle        --Alternates the colour of the g
 greyOrGray (xPos, yPos) = if even ((xPos `div` sqSize) + (yPos `div` sqSize)) then (UI.solidColor (UI.RGB 90 90 90)) else (UI.solidColor (UI.RGB 180 180 180))
 
 checkGameState :: Window -> Grid -> Bool -> IORef GameState -> UI ()
-checkGameState window _ True gameState = do
+checkGameState window _ False gameState = do
     getBody window #+ [ UI.h1 #+ [ string "You Lose!"] ]
     liftIO $ writeIORef gameState GameOver
     return ()
-checkGameState window (Grid _ _ _ 0 _) False gameState = do
+checkGameState window (Grid _ _ _ 0 _) True gameState = do
         getBody window #+ [ UI.h1 #+ [ string "You Win!"] ]
         liftIO $ writeIORef gameState Victory
         return ()

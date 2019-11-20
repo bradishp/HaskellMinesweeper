@@ -51,11 +51,11 @@ instance Show Square where
 
 --Declare Constants
 numberOfMines :: Int
-numberOfMines = 10
+numberOfMines = 20 --B=10 I=40 P=99
 heightOfMap :: Int
-heightOfMap = 10
+heightOfMap = 9 --B=9 I=16 P=16
 widthOfMap :: Int
-widthOfMap = 10
+widthOfMap = 9 --B=9 I=16 P=30
       
 --Get this to run in the state monad
 setupGrid :: StdGen -> (Grid, StdGen)
@@ -102,9 +102,9 @@ queueActions op (x:xs) = (Action op x):(queueActions op xs)
 
 --Reveal a tile
 clearSquare :: Grid -> (Int, Int) -> (Grid, Bool)
-clearSquare grid coords = case oldSquare of (Clear _ _) -> (grid, False) --Tile has already been cleared
-                                            _ -> case newSquare of (Mine _ _) -> (newGrid, True)
-                                                                   _ -> (cascadeClear newGrid [coords], False)   
+clearSquare grid coords = case oldSquare of (Clear _ _) -> (grid, True) --Tile has already been cleared
+                                            _ -> case newSquare of (Mine _ _) -> (newGrid, False)
+                                                                   _ -> (cascadeClear newGrid [coords], True)   
                                                --Need to clear first tile twice to make sure proper checks are done
     where oldSquare = lookupSquare grid coords
           action = (Action revealTile coords)
