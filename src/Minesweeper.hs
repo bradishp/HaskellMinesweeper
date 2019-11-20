@@ -90,15 +90,11 @@ updateRow (Row (lastSq:prevSqs) nextSqs currColIndex) n action | n > 0 = updateR
 mineTheField :: Grid -> [(Int, Int)] -> Grid
 mineTheField grid [] = grid
 mineTheField grid (mine:mines) = mineTheField (placeMines grid actions) mines
-    where actions = (Action placeMine mine):(queueActions incrAdjMineCount (getSurrounding mine))   --place the mine and increment the surrounding tiles
+    where actions = (Action placeMine mine):(map (Action incrAdjMineCount) (getSurrounding mine))   --place the mine and increment the surrounding tiles
 
 placeMines :: Grid -> [Action] -> Grid
 placeMines grid [] = grid
 placeMines grid (action:actions) = placeMines (fst (updateGrid grid (targetRowDistance grid action) action)) actions
-
-queueActions :: (Square->Square) -> [(Int, Int)] -> [Action]
-queueActions _ [] = []
-queueActions op (x:xs) = (Action op x):(queueActions op xs)
 
 --Reveal a tile
 clearSquare :: Grid -> (Int, Int) -> (Grid, Bool)
@@ -140,6 +136,8 @@ lookupSquare :: Grid -> (Int, Int) -> Square
 lookupSquare grid coords = snd $ updateGrid grid distance action
     where action = (Action id coords)
           distance = (targetRowDistance grid action)
+
+--computerLookupSquare :: Grid -> (Int, Int) -> PublicSquare  --TODO Allows computer to look at squares and gives know info
           
 --Various Actions you can perform on square
 placeMine :: Square -> Square
