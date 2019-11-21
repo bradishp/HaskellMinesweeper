@@ -1,10 +1,11 @@
 module AutoSolver( 
     makeRandomMove,
-    computerMove
-    --computerSolve
+    computerMove,
+    computerSolve
     ) where
 
 import Minesweeper    
+import Lib
 import System.Random   
 import Control.Monad(liftM) 
 import System.IO.Unsafe (unsafePerformIO)
@@ -37,9 +38,10 @@ data InferredMove = ClearSq (Int, Int) | FlagSq (Int, Int)
     deriving Show
     
 instance Eq InferredMove where
-    (==) (ClearSq coords) (FlagSq coord) = coords == coords
-    (==) (FlagSq coords) (FlagSq coord) = coords == coords
-    (==) _ _ = False
+    (==) (ClearSq coords1) (ClearSq coords2) = coords1 == coords2
+    (==) (FlagSq coords1) (FlagSq coords2) = coords1 == coords2
+    (==) (ClearSq _) (FlagSq coords) = False
+    (==) (FlagSq _) (ClearSq coords) = False
 
 --Automatic Computer Solver
 makeRandomMove :: Grid -> StdGen -> (Grid, Bool)
@@ -66,22 +68,26 @@ tankAlgorithm grid [] = (grid, False)  --We have failed to infer any moves
 tankAlgorithm grid ((SquareProb coords _):rest) = if changed then (newGrid, changed) else tankAlgorithm newGrid rest
     where (newGrid, changed) = investigateSquare grid coords
 
-investigateSquare :: Grid -> (Int, Int) -> (Grid, Bool)
-investigateSquare grid sqCoords = if length movesIntersection > 0 then (unsafePerformIO $ print (head movesIntersection))`seq` (playMove grid (head movesIntersection), True) else (grid, False)
-    where movesIfMine = propagateInference grid [FlagSq sqCoords] [FlagSq sqCoords]
-          movesIfClear = propagateInference grid [ClearSq sqCoords] [ClearSq sqCoords]
-          movesIntersection = intersect movesIfMine movesIfClear
+investigateSquare :: Grid -> (Int, Int) -> (Grid, Bool) --TODO remove this abomination
+investigateSquare grid sqCoords = if length movesIntersection > 0 
+    then (unsafePerformIO $ print ("Have deduced these moves " ++ ((show (movesIntersection)) ++ (show sqCoords))))`seq` (playMove grid (head movesIntersection), True) 
+    else (grid, False)
+        where movesIfMine = propagateInference grid [FlagSq sqCoords] [FlagSq sqCoords]
+              movesIfClear = propagateInference grid [ClearSq sqCoords] [ClearSq sqCoords]
+              movesIntersection = intersect movesIfMine movesIfClear
 
 propagateInference :: Grid -> [InferredMove] -> [InferredMove] -> [InferredMove]
 propagateInference grid [] inferred = inferred
-propagateInference grid (x:xs) inferred = inferred
+propagateInference grid (x:xs) inferred = propagateInference grid (xs++newInferred) (inferred++newInferred)
         where surroundingSqs = getSurrounding (coordsOfInferred x)
+              newInferred = searchSurrounding grid surroundingSqs inferred
 
 searchSurrounding :: Grid -> [(Int, Int)] -> [InferredMove] -> [InferredMove]
 searchSurrounding grid [] inferred = []
 searchSurrounding grid (coords:rest) inferred = case (getInferredValue grid coords inferred) of 
     (Clear 0 _) -> searchSurrounding grid rest inferred --No information here as all adjacent tiles will already be cleared
-    (Clear n _) -> searchSurrounding grid rest (tankSurrounding grid inferred (getSurrounding coords) n []  )
+    (Clear n _) -> let newInferred = tankSurrounding grid inferred (getSurrounding coords) n [] in
+                   ((searchSurrounding grid rest (inferred++newInferred)) ++ newInferred)
     otherwise -> searchSurrounding grid rest inferred --No information here
 
 --Nasty code duplication
@@ -98,11 +104,8 @@ tankSurrounding grid inferred (coords:rest) minesNum unknownSqs = case getInferr
 
 playMove :: Grid -> InferredMove -> Grid
 playMove grid (FlagSq coords) = placeFlag grid coords
-playMove grid (ClearSq coords) = fst $ clearSquare grid coords
-
-intersect :: Eq a => [a] -> [a] -> [a] 
-intersect [] list = list
-intersect (x:xs) list = if elem x list then (x:(intersect xs list)) else intersect xs list
+playMove grid (ClearSq coords) = if success then newGrid else error ("I have incorrectly inferred a square" ++ show (coords))
+    where (newGrid, success) = clearSquare grid coords
 
 coordsOfInferred :: InferredMove -> (Int, Int)
 coordsOfInferred (FlagSq coords) = coords
@@ -162,14 +165,9 @@ getDefaultProb (Grid _ _ _ numLeft numFlagged) = probOfEvent numMines sqsLeft
 probOfEvent :: Int -> Int -> Double
 probOfEvent event sampleSpace = (fromIntegral event) / (fromIntegral sampleSpace)
 
---Check if a grid has been changed. Only check number of squares revealed and number of flags.
---This means this function should never be used if the grids are different to begin with
-gridChanged :: Grid -> Grid -> Bool
-gridChanged ( Grid _ _ _ numLeft1 numFlagged1 ) ( Grid _ _ _ numLeft2 numFlagged2 ) 
-    = numLeft1 /= numLeft2 || numFlagged1 /= numFlagged2 
-
 --Get computer to solve whole grid. Might remove this
-{-computerSolve :: Grid -> Grid   --If we have changed something (either adding a flag or clearing a tile) go through grid again
-computerSolve grid = if gridChanged grid newGrid then computerSolve newGrid else newGrid --If we have changed something (either adding a flag or clearing a tile) go through grid again
-    where newGrid = makeTrivialMove grid (0, 0)
-    -}
+computerSolve :: Grid -> StdGen -> (Grid, Bool)   --If we have changed something (either adding a flag or clearing a tile) go through grid again
+computerSolve grid gen = if (numLeft newGrid) == 0 then (newGrid, True)
+    else if ongoing then computerSolve newGrid gen
+    else (newGrid, False)
+        where (newGrid, ongoing) = computerMove grid gen

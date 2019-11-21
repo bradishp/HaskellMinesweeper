@@ -51,11 +51,11 @@ instance Show Square where
 
 --Declare Constants
 numberOfMines :: Int
-numberOfMines = 20 --B=10 I=40 P=99
+numberOfMines = 40 --B=10 I=40 P=99
 heightOfMap :: Int
-heightOfMap = 9 --B=9 I=16 P=16
+heightOfMap = 16 --B=9 I=16 P=16
 widthOfMap :: Int
-widthOfMap = 9 --B=9 I=16 P=30
+widthOfMap = 16 --B=9 I=16 P=30
       
 --Get this to run in the state monad
 setupGrid :: StdGen -> (Grid, StdGen)

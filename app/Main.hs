@@ -22,6 +22,7 @@ sqSize = 50
 --Ideas
 -- Pass stdGen in some state so program isn't as messy
 -- Remove coords from square as they aren't really needed and use up a lot of space
+-- Have it so you can't hit a mine on the first click
 
 --Setup the game
 main :: IO ()
@@ -45,7 +46,8 @@ setup window = do
     uncoverMode <- UI.button #+ [string "Uncover"]
     flagMode <- UI.button #+ [string "Flag"]
     aiMove <- UI.button #+ [string "Make AI move"]
-    getBody window #+ [column [element canvas], element uncoverMode, element flagMode, element aiMove]
+    aiSolve <- UI.button #+ [string "Get AI to attempt to solve the whole grid"]
+    getBody window #+ [column [element canvas], element uncoverMode, element flagMode, element aiMove, element aiSolve]
 
     --Setup minesweeper grid and populate it
     generator <- liftIO $ newStdGen
@@ -67,6 +69,20 @@ setup window = do
                     currGrid <- liftIO $ readIORef grid
                     generator <- liftIO $ readIORef gen --Don't need to bother updating generator as it will just guess the same values until it hits a new one
                     let (newGrid, success) = computerMove currGrid generator
+                    liftIO $ writeIORef grid newGrid
+                    liftIO $ print newGrid
+                    displayCanvas canvas newGrid
+                    checkGameState window newGrid success gameState
+            _ ->
+                return ()
+
+    on UI.click aiSolve $ \_ -> do
+        gs <- liftIO $ readIORef gameState
+        case gs of
+            Ongoing -> do
+                    currGrid <- liftIO $ readIORef grid
+                    generator <- liftIO $ readIORef gen --Don't need to bother updating generator as it will just guess the same values until it hits a new one
+                    let (newGrid, success) = computerSolve currGrid generator
                     liftIO $ writeIORef grid newGrid
                     liftIO $ print newGrid
                     displayCanvas canvas newGrid
