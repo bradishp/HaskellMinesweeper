@@ -1,32 +1,36 @@
 module Minesweeper  (
     Grid (..),
     Row (..),
-    Square (..),
+    DisplayedSquare (..),
     Action (..),
     numberOfMines,
     heightOfMap,
     widthOfMap,
-    setupGrid,
+    createBlankGrid,
+    createMinedGrid,
     placeFlag,
     lookupSquare,
     clearSquare,
-    targetRowDistance,
     getSurrounding,
-    genRandomPairs,
-    startOfGrid,
-    startOfRow
+    genRandomCoords,
+    getDisplayGrid
 ) where
 
 import System.Random
 import Data.Monoid ((<>))
+import Lib
 
-data Grid = Grid { prevRows :: [Row], nextRows :: [Row], currRowIndex :: Int, numLeft :: Int, numFlagged :: Int }    --Zipper style lists, allows us to easily go backwards and forwards through the list
+--Zipper style lists, allows us to easily go backwards and forwards through the list
+data Grid = Grid { prevRows :: [Row], nextRows :: [Row], currRowIndex :: Int, numLeft :: Int, numFlagged :: Int } 
 
 data Row = Row { prevCols :: [Square], nextCols :: [Square], currColIndex :: Int }
 
-data Square = Clear Int (Int, Int)
-            | Hidden Int Bool (Int, Int)
-            | Mine Bool (Int, Int)
+data DisplayedSquare = Visible Int
+                    | Unknown Bool
+
+data Square = Clear Int
+            | Hidden Int Bool
+            | Mine Bool
 
 data Action = Action (Square->Square) (Int, Int)    --Takes the coordinates of a square and a function to run on that square
 
@@ -42,36 +46,31 @@ instance Show Row where
     show ( Row [] nextCols _ ) = show nextCols
     show row = show $ startOfRow row --Make sure we display the columns in the correct order
 
-instance Show Square where
-    show (Clear n _) = show n --Revealed square
-    show (Hidden _ True _) = show (NoQuotes "F") --Flagged square
-    show (Mine False _) = show (NoQuotes "X") --Mine only for debugging
-    show (Mine True _) = show (NoQuotes "F") --Flagged square
+instance Show Square where  --Used for terminal version of the game
+    show (Clear n) = show n --Revealed square
+    show (Hidden _ True) = show (NoQuotes "F") --Flagged square
+    show (Mine False) = show (NoQuotes "X") --Mine only for debugging TODO remove this
+    show (Mine True) = show (NoQuotes "F") --Flagged square
     show _ = show (NoQuotes " ")    --Unknown may be a bomb or empty
 
 --Declare Constants
 numberOfMines :: Int
-numberOfMines = 40 --B=10 I=40 P=99
+numberOfMines = 10 --B=10 I=40 P=99
 heightOfMap :: Int
-heightOfMap = 16 --B=9 I=16 P=16
+heightOfMap = 9 --B=9 I=16 P=16
 widthOfMap :: Int
-widthOfMap = 16 --B=9 I=16 P=30
+widthOfMap = 9 --B=9 I=16 P=30
       
---Get this to run in the state monad
-setupGrid :: StdGen -> (Grid, StdGen)
-setupGrid generator = (mineTheField grid randomPairs, newGenerator)
-    where (randomPairs, newGenerator) = genRandomPairs generator numberOfMines []
-          grid = createGrid ((heightOfMap * widthOfMap) - numberOfMines)
-
 --Create the grid
-createGrid :: Int -> Grid
-createGrid squaresToClear = (Grid  [] (genGrid 0) 0 squaresToClear 0)
+createBlankGrid :: Grid
+createBlankGrid = (Grid  [] (genGrid 0) 0 sqsLeft 0)
     where genGrid n | n == heightOfMap = []
                     | otherwise = (Row [] (genRow n 0) 0):(genGrid (n+1))
+          sqsLeft = ((heightOfMap * widthOfMap) - numberOfMines)
 
 genRow :: Int -> Int -> [Square]
 genRow row col | col == widthOfMap = []
-               | otherwise = ( Hidden 0 False (row, col) ):(genRow row (col+1) )
+               | otherwise = (Hidden 0 False):(genRow row (col+1))
 
 --Perform an action on the grid
 updateGrid :: Grid -> Int -> Action-> (Grid, Square)
@@ -87,6 +86,10 @@ updateRow (Row prevSqs (currSq:nextSqs) currColIndex) n action | n < 0 = updateR
 updateRow (Row (lastSq:prevSqs) nextSqs currColIndex) n action | n > 0 = updateRow (Row prevSqs (lastSq:nextSqs) (currColIndex-1)) (n-1) action
 
 --Place the mines on the field
+createMinedGrid :: Grid -> StdGen -> (Int, Int) -> (Grid, StdGen)
+createMinedGrid grid gen (fstRow, fstCol) = (mineTheField grid (init randomPairs), newGenerator)
+    where (randomPairs, newGenerator) = genRandomCoords gen numberOfMines [(fstRow, fstCol)]
+
 mineTheField :: Grid -> [(Int, Int)] -> Grid
 mineTheField grid [] = grid
 mineTheField grid (mine:mines) = mineTheField (placeMines grid actions) mines
@@ -98,19 +101,19 @@ placeMines grid (action:actions) = placeMines (fst (updateGrid grid (targetRowDi
 
 --Reveal a tile
 clearSquare :: Grid -> (Int, Int) -> (Grid, Bool)
-clearSquare grid coords = case oldSquare of (Clear _ _) -> (grid, True) --Tile has already been cleared
-                                            _ -> case newSquare of (Mine _ _) -> (newGrid, False)
+clearSquare grid coords = case oldSquare of (Clear _) -> (grid, True) --Tile has already been cleared
+                                            _ -> case newSquare of (Mine _) -> (newGrid, False)
                                                                    _ -> (cascadeClear newGrid [coords], True)   
                                                --Need to clear first tile twice to make sure proper checks are done
-    where oldSquare = lookupSquare grid coords
+    where oldSquare = internalLookupSq grid coords
           action = (Action revealTile coords)
           distance = (targetRowDistance grid action)
           (newGrid, newSquare) = updateGrid grid distance action
 
 cascadeClear :: Grid -> [(Int, Int)] -> Grid
 cascadeClear grid [] = grid
-cascadeClear grid (coords:rest) = case newSquare of (Clear 0 _) -> isValidClear newGrid (rest ++ (getSurrounding coords))  --Infinite recursion
-                                                    (Clear _ _) -> isValidClear newGrid rest 
+cascadeClear grid (coords:rest) = case newSquare of (Clear 0) -> isValidClear newGrid (rest ++ (getSurrounding coords))  --Infinite recursion
+                                                    (Clear _) -> isValidClear newGrid rest 
                                                     _ -> error "Tile isn't revealed after it has been cleared!" --This case should never happen
     where action = (Action revealTile coords)
           (partialNewGrid, newSquare) = updateGrid grid (targetRowDistance grid action) action
@@ -118,46 +121,52 @@ cascadeClear grid (coords:rest) = case newSquare of (Clear 0 _) -> isValidClear 
 
 isValidClear :: Grid -> [(Int, Int)] -> Grid --Iterates through the list until it finds the next square which needs to be cleared
 isValidClear grid [] = grid
-isValidClear grid (coords:rest) = case lookupSquare grid coords of (Hidden _ _ _) -> cascadeClear grid (coords:rest)
-                                                                   _ -> isValidClear grid rest
+isValidClear grid (coords:rest) = case internalLookupSq grid coords of (Hidden _ _) -> cascadeClear grid (coords:rest)
+                                                                       _ -> isValidClear grid rest
 
 --Place a flag on the grid
 placeFlag :: Grid -> (Int, Int) -> Grid
-placeFlag grid coords = case square of (Clear _ _) -> newGrid
-                                       (Mine True _) -> newGrid { numFlagged = (numFlagged newGrid) + 1}
-                                       (Mine False _) -> newGrid { numFlagged = (numFlagged newGrid) - 1}
-                                       (Hidden _ True _) -> newGrid { numFlagged = (numFlagged newGrid) + 1}
-                                       (Hidden _ False _) -> newGrid { numFlagged = (numFlagged newGrid) - 1}
+placeFlag grid coords = case square of (Clear _) -> newGrid
+                                       (Mine True) -> newGrid { numFlagged = (numFlagged newGrid) + 1}
+                                       (Mine False) -> newGrid { numFlagged = (numFlagged newGrid) - 1}
+                                       (Hidden _ True) -> newGrid { numFlagged = (numFlagged newGrid) + 1}
+                                       (Hidden _ False) -> newGrid { numFlagged = (numFlagged newGrid) - 1}
     where (newGrid, square) = updateGrid grid (targetRowDistance grid action) action
           action = (Action toggleFlag coords)
 
 --Lookup Square
-lookupSquare :: Grid -> (Int, Int) -> Square
-lookupSquare grid coords = snd $ updateGrid grid distance action
+lookupSquare :: Grid -> (Int, Int) -> DisplayedSquare   --Limit what the outside world can see about the square
+lookupSquare grid coords = externalSq (internalLookupSq grid coords)
+
+internalLookupSq :: Grid -> (Int, Int) -> Square
+internalLookupSq grid coords = snd $ updateGrid grid distance action
     where action = (Action id coords)
           distance = (targetRowDistance grid action)
 
---computerLookupSquare :: Grid -> (Int, Int) -> PublicSquare  --TODO Allows computer to look at squares and gives know info
+externalSq :: Square -> DisplayedSquare 
+externalSq (Clear num) = Visible num
+externalSq (Hidden _ flag) = Unknown flag
+externalSq (Mine flag) = Unknown flag
           
 --Various Actions you can perform on square
 placeMine :: Square -> Square
-placeMine (Hidden _ flag coords) = Mine flag coords
+placeMine (Hidden _ flag) = Mine flag
 placeMine _ = error "Can't place a mine there"
 
 revealTile :: Square -> Square
-revealTile (Clear n coords) = Clear n coords                                
-revealTile (Hidden n _ coords) = Clear n coords
-revealTile (Mine flag coords) = Mine flag coords
+revealTile (Clear n) = Clear n                                
+revealTile (Hidden n _) = Clear n
+revealTile (Mine flag) = Mine flag
 
 toggleFlag :: Square -> Square  --Place or remove a flag on a square
-toggleFlag (Clear n coords) = Clear n coords
-toggleFlag (Hidden n flag coords) = Hidden n (not flag) coords
-toggleFlag (Mine flag coords) = Mine (not flag) coords
+toggleFlag (Clear n) = Clear n
+toggleFlag (Hidden n flag) = Hidden n (not flag)
+toggleFlag (Mine flag) = Mine (not flag)
 
 incrAdjMineCount :: Square -> Square  --Increment the number of adjacent mines
-incrAdjMineCount (Clear n coords) = Clear (n+1) coords
-incrAdjMineCount (Hidden n flag coords) = Hidden (n+1) flag coords
-incrAdjMineCount (Mine flag coords) = Mine flag coords
+incrAdjMineCount (Clear n) = Clear (n+1)
+incrAdjMineCount (Hidden n flag) = Hidden (n+1) flag
+incrAdjMineCount (Mine flag) = Mine flag
 
 --Functions for returning to the begining of a row or the grid
 startOfRow :: Row -> Row
@@ -184,9 +193,16 @@ inRange (row, col) = row >= 0 && row < heightOfMap && col >= 0 && col < widthOfM
 getSurrounding :: (Int, Int) -> [(Int, Int)]
 getSurrounding (row, col) = filter inRange [(row-1, col-1), (row-1, col), (row-1, col+1), (row, col-1), (row, col+1), (row+1, col-1), (row+1, col), (row+1, col+1)]
 
-genRandomPairs :: StdGen -> Int -> [(Int, Int)] -> ([(Int, Int)], StdGen)
-genRandomPairs newGen 0 list = (list, newGen)
-genRandomPairs g n list = if elem (row, col) list then genRandomPairs g3 n list else genRandomPairs g3 (n-1) ((row, col):list) --Make sure the tile doesn't already have a mine in it
+genRandomCoords :: StdGen -> Int -> [(Int, Int)] -> ([(Int, Int)], StdGen)
+genRandomCoords newGen 0 list = (list, newGen)
+genRandomCoords g n list = if elem (row, col) list then genRandomCoords g3 n list else genRandomCoords g3 (n-1) ((row, col):list) --Make sure the tile doesn't already have a mine in it
     where (row, g2) = randomR (0, heightOfMap-1) g
           (col, g3) = randomR (0, widthOfMap-1) g2    
-            
+
+getDisplayGrid :: Grid -> [[DisplayedSquare]]
+getDisplayGrid grid = map getDisplayRow nextRows
+    where (Grid [] nextRows _ _ _) = startOfGrid grid
+
+getDisplayRow :: Row -> [DisplayedSquare]
+getDisplayRow row = map externalSq sqs
+    where (Row [] sqs _) = startOfRow row
