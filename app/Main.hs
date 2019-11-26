@@ -14,7 +14,7 @@ import Control.Monad.Trans (liftIO)
 
 data Modes = Uncover | Flag
 
-data GameState = Ongoing Bool | Victory | GameOver  --Bool says whether it is first move or not
+data GameState = Ongoing Bool Int Int | Victory Int Int | GameOver Int Int  --Bool says whether it is first move or not
 
 sqSize :: Num a => a    --Adjust this to adjust the size of the grid
 sqSize = 50
@@ -38,7 +38,7 @@ setup window = do
     --Variables
     pos <- liftIO $ newIORef (0,0)
     mode <- liftIO $ newIORef Uncover
-    gameState <- liftIO $ newIORef (Ongoing True)
+    gameState <- liftIO $ newIORef (Ongoing True 0 0)
 
     --Buttons
     uncoverMode <- UI.button #+ [string "Uncover"]
@@ -46,10 +46,10 @@ setup window = do
     aiMove <- UI.button #+ [string "Make AI move"]
     aiSolve <- UI.button #+ [string "AI solve grid"]
     reset <- UI.button #+ [string "New game"]
-    gameStatusText <- UI.h1 #+ [string "Ongoing"]
+    gameLog <- UI.h1 #+ [string "Game Log"]
     getBody window #+ [column [element canvas], 
                         element uncoverMode, element flagMode, element aiMove, element aiSolve, 
-                        element reset, element gameStatusText]
+                        element reset, element gameLog]
 
     --Setup minesweeper grid and populate it
     generator <- liftIO $ newStdGen
@@ -72,15 +72,14 @@ setup window = do
     on UI.click aiSolve $ \_ -> do
         gs <- liftIO $ readIORef gameState
         case gs of 
-            (Ongoing  True) -> do   --First move so run function twice once to do random first move and once to do rest
+            (Ongoing True _ _) -> do   --First move so run function twice once to do random first move and once to do rest
                 makeAiMove window canvas grid gen gameState computerSolve
                 makeAiMove window canvas grid gen gameState computerSolve
-            (Ongoing False) -> do
+            (Ongoing False _ _) -> do
                 makeAiMove window canvas grid gen gameState computerSolve
             otherwise -> do
                 return()
         
-
     --New game
     on UI.click reset $ \_ -> do
        do newGame canvas grid gen gameState
@@ -93,7 +92,7 @@ setup window = do
     on UI.click canvas $ \_  -> do
         gs <- liftIO $ readIORef gameState
         case gs of
-            (Ongoing firstMove) -> do
+            (Ongoing firstMove _ _) -> do
                 (x, y) <- liftIO $ readIORef pos
                 let (col, row) = coordsToIndex (x, y)
                 currGrid <- liftIO $ readIORef grid
@@ -118,18 +117,18 @@ setup window = do
 makeClearMove :: Window -> UI.Canvas -> IORef Grid -> IORef GameState -> (Int, Int) -> UI ()
 makeClearMove window canvas grid gameState (row, col) = do
     currGrid <- liftIO $ readIORef grid
-    let (newGrid, hitMine) = clearSquare currGrid (row, col)
+    let (newGrid, success) = clearSquare currGrid (row, col)
     liftIO $ writeIORef grid newGrid
     liftIO $ print newGrid
     displayGrid canvas (getDisplayGrid newGrid) 0 0
-    checkGameState window newGrid hitMine gameState 
+    checkGameState window newGrid success gameState 
 
 --Handle both single and multi AI moves
 makeAiMove :: Window -> UI.Canvas -> IORef Grid -> IORef StdGen -> IORef GameState -> (Grid -> StdGen -> (Grid, Bool)) -> UI ()
 makeAiMove window canvas grid gen gameState playMoveType = do
     gs <- liftIO $ readIORef gameState
     case gs of
-        (Ongoing firstMove) -> do
+        (Ongoing firstMove _ _) -> do
             case firstMove of
                 True -> do      --First move so just make a random guess
                     generator <- liftIO $ readIORef gen
@@ -144,7 +143,7 @@ makeAiMove window canvas grid gen gameState playMoveType = do
                     liftIO $ writeIORef grid newGrid
                     liftIO $ print newGrid
                     displayGrid canvas (getDisplayGrid newGrid) 0 0
-                    checkGameState window newGrid success gameState
+                    checkGameState window newGrid success gameState 
         _ ->
             return ()
 
@@ -155,27 +154,55 @@ firstTurn grid gen gameState fstGuess = do
     let (newGrid, newGen) = createMinedGrid currGrid currGen fstGuess
     liftIO $ writeIORef grid newGrid
     liftIO $ writeIORef gen newGen
-    liftIO $ writeIORef gameState (Ongoing False)
+    currGameState <- liftIO $ readIORef gameState
+    let (wins, played) = getWinRatio currGameState
+    liftIO $ writeIORef gameState (Ongoing False wins played)
 
---
+--Checks if the game is over and updates the game accordingly
 checkGameState :: Window -> Grid -> Bool -> IORef GameState -> UI ()
 checkGameState window _ False gameState = do
-    getBody window #+ [ UI.h1 #+ [string "You Lost a Game!"] ]
-    liftIO $ writeIORef gameState GameOver
+    currGameState <- liftIO $ readIORef gameState
+    let (wins, played) = getWinRatio currGameState
+    getBody window #+ [ UI.p #+ [string "You Lost a Game!"] ]
+    getBody window #+ [ UI.p #+ [string ("Current record: " ++ (show wins) ++ " wins in " ++ (show (played+1)) ++ " games")] ]
+    liftIO $ writeIORef gameState (GameOver wins (played+1))
     return ()
 checkGameState window (Grid _ _ _ 0 _) True gameState = do
-        getBody window #+ [ UI.h1 #+ [ string "You Won a Game!"] ]
-        liftIO $ writeIORef gameState Victory
-        return ()
+    currGameState <- liftIO $ readIORef gameState
+    let (wins, played) = getWinRatio currGameState
+    getBody window #+ [ UI.p #+ [ string "You Won a Game!"] ]
+    getBody window #+ [ UI.p #+ [string ("Current record: " ++ (show (wins+1)) ++ " wins in " ++ (show (played+1)) ++ " games")] ]
+    liftIO $ writeIORef gameState (Victory (wins+1) (played+1))
+    return ()
 checkGameState _ _ _ _ = return ()  --Game is still ongoing
+
+{-defeat :: Window -> Canvas -> (Int, Int) IORefGameState -> UI ()
+defeat window canvas coords gameState = do
+    currGameState <- liftIO $ readIORef gameState
+    let (wins, played) = getWinRatio currGameState
+    getBody window #+ [ UI.p #+ [string "You Lost a Game!"] ]
+    getBody window #+ [ UI.p #+ [string ("Current record: " ++ (show wins) ++ " wins in " ++ (show (played+1)) ++ " games")] ]
+    liftIO $ writeIORef gameState (GameOver wins (played+1))
+    return ()
+
+victory :: Window -> IORefGameState -> UI ()
+victory window gameState = do
+    currGameState <- liftIO $ readIORef gameState
+    let (wins, played) = getWinRatio currGameState
+    getBody window #+ [ UI.p #+ [ string "You Won a Game!"] ]
+    getBody window #+ [ UI.p #+ [string ("Current record: " ++ (show (wins+1)) ++ " wins in " ++ (show (played+1)) ++ " games")] ]
+    liftIO $ writeIORef gameState (Victory (wins+1) (played+1))
+    return ()-}
 
 newGame :: UI.Canvas -> IORef Grid -> IORef StdGen-> IORef GameState -> UI()
 newGame canvas grid gen gameState = do 
-    generator <- liftIO $ newStdGen --Maybe shouldn't 
+    generator <- liftIO $ newStdGen --Maybe shouldn't get a new one
     let initialGrid = createBlankGrid
     liftIO $ writeIORef gen generator
     liftIO $ writeIORef grid initialGrid
-    liftIO $ writeIORef gameState (Ongoing True)
+    currGameState <- liftIO $ readIORef gameState
+    let (wins, played) = getWinRatio currGameState
+    liftIO $ writeIORef gameState (Ongoing True wins played)
     displayGrid canvas (getDisplayGrid initialGrid) 0 0      --Display grid on the screen
 
 --Display mine grid
@@ -218,3 +245,8 @@ coordsToIndex (x, y) = (x `div` sqSize, y `div` sqSize)
 colourSq :: (Int, Int) -> UI.FillStyle        --Alternates the colour of the grid squares
 colourSq (xPos, yPos) | even ((xPos `div` sqSize) + (yPos `div` sqSize)) = UI.solidColor (UI.RGB 90 90 90)
                       | otherwise = UI.solidColor (UI.RGB 180 180 180)
+
+getWinRatio :: GameState -> (Int, Int)
+getWinRatio (Ongoing _ wins played) = (wins, played)
+getWinRatio (GameOver wins played) = (wins, played)
+getWinRatio (Victory wins played) = (wins, played)
